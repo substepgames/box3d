@@ -1333,3 +1333,354 @@ bool b3DeserializeIntoShell( const uint8_t* data, int size, b3World* world, b3Re
 
 	return r->ok;
 }
+
+int b3SaveSnapshot( b3WorldId worldId, b3RecBuffer* buf )
+{
+	b3World* world = b3GetWorldFromId( worldId );
+	int startSize = buf->size;
+
+	// Snapshot header
+	b3SnapHeader hdr;
+	hdr.magic = B3_SNAP_MAGIC;
+	hdr.version = B3_SNAP_VERSION;
+	hdr.layoutHash = b3ComputeLayoutHash();
+	hdr.flags = B3_ENABLE_VALIDATION ? B3_SNAP_FLAG_VALIDATION : 0u;
+#if defined( BOX3D_DOUBLE_PRECISION )
+	hdr.flags |= B3_SNAP_FLAG_DOUBLE_PRECISION;
+#endif
+	b3SnapW_Bytes( buf, &hdr, (int)sizeof( hdr ) );
+
+	// World scalars
+	b3SerWorldConfig( buf, world );
+
+	// 6 id pools (Box3D has no chainIdPool)
+	b3SerIdPool( buf, &world->bodyIdPool );
+	b3SerIdPool( buf, &world->shapeIdPool );
+	b3SerIdPool( buf, &world->contactIdPool );
+	b3SerIdPool( buf, &world->jointIdPool );
+	b3SerIdPool( buf, &world->islandIdPool );
+	b3SerIdPool( buf, &world->solverSetIdPool );
+
+	// Solver sets
+	int setCount = world->solverSets.count;
+	b3SnapW_I32( buf, setCount );
+	for ( int i = 0; i < setCount; ++i )
+	{
+		b3SerSolverSet( buf, world->solverSets.data + i );
+	}
+
+	// Sparse body array (userData is host wiring, zero it on the copy)
+	{
+		int bodyCount = world->bodies.count;
+		b3SnapW_I32( buf, bodyCount );
+		for ( int i = 0; i < bodyCount; ++i )
+		{
+			b3Body elem = world->bodies.data[i];
+			elem.userData = NULL;
+			b3SnapW_Bytes( buf, &elem, sizeof( b3Body ) );
+		}
+	}
+
+	// Contact sparse array with manifold and mesh triangleCache
+	b3SerContacts( buf, world );
+
+	// Joint sparse array (userData scrubbed)
+	{
+		int jointCount = world->joints.count;
+		b3SnapW_I32( buf, jointCount );
+		for ( int i = 0; i < jointCount; ++i )
+		{
+			b3Joint elem = world->joints.data[i];
+			elem.userData = NULL;
+			b3SnapW_Bytes( buf, &elem, sizeof( b3Joint ) );
+		}
+	}
+
+	// Sensors: shapeId + 3 inner arrays each
+	{
+		int sensorCount = world->sensors.count;
+		b3SnapW_I32( buf, sensorCount );
+		for ( int i = 0; i < sensorCount; ++i )
+		{
+			b3Sensor* s = world->sensors.data + i;
+			b3SnapW_I32( buf, s->shapeId );
+			b3SerPodArray( buf, s->hits );
+			b3SerPodArray( buf, s->overlaps1 );
+			b3SerPodArray( buf, s->overlaps2 );
+		}
+	}
+
+	// Islands: 4 scalars + 3 inner arrays each
+	{
+		int islandCount = world->islands.count;
+		b3SnapW_I32( buf, islandCount );
+		for ( int i = 0; i < islandCount; ++i )
+		{
+			b3Island* island = world->islands.data + i;
+			b3SnapW_I32( buf, island->setIndex );
+			b3SnapW_I32( buf, island->localIndex );
+			b3SnapW_I32( buf, island->islandId );
+			b3SnapW_I32( buf, island->constraintRemoveCount );
+			b3SerPodArray( buf, island->bodies );
+			b3SerPodArray( buf, island->contacts );
+			b3SerPodArray( buf, island->joints );
+		}
+	}
+
+	// Broad phase
+	b3BroadPhase* bp = &world->broadPhase;
+	for ( int t = 0; t < b3_bodyTypeCount; ++t )
+	{
+		b3SerTree( buf, &bp->trees[t] );
+	}
+	for ( int t = 0; t < b3_bodyTypeCount; ++t )
+	{
+		b3SerBitSet( buf, &bp->movedProxies[t] );
+	}
+	b3SerPodArray( buf, bp->moveArray );
+	b3SerHashSet( buf, &bp->pairSet );
+
+	// Constraint graph
+	b3ConstraintGraph* graph = &world->constraintGraph;
+	for ( int c = 0; c < B3_GRAPH_COLOR_COUNT; ++c )
+	{
+		b3SerGraphColor( buf, &graph->colors[c], c == B3_OVERFLOW_INDEX );
+	}
+
+	b3SerNames( buf, &world->names );
+
+	return buf->size - startSize;
+}
+
+bool b3RestoreSnapshot( const uint8_t* data, int size, b3WorldId worldId )
+{
+	b3World* world = b3GetWorldFromId( worldId );
+
+	if ( data == NULL || size < (int)sizeof( b3SnapHeader ) )
+	{
+		return false;
+	}
+
+	// Validate header
+	b3SnapHeader hdr;
+	memcpy( &hdr, data, sizeof( hdr ) );
+	if ( hdr.magic != B3_SNAP_MAGIC || hdr.version != B3_SNAP_VERSION )
+	{
+		printf( "b3DeserializeIntoShell: bad magic/version\n" );
+		return false;
+	}
+	bool imageDouble = ( hdr.flags & B3_SNAP_FLAG_DOUBLE_PRECISION ) != 0;
+#if defined( BOX3D_DOUBLE_PRECISION )
+	bool buildDouble = true;
+#else
+	bool buildDouble = false;
+#endif
+	if ( imageDouble != buildDouble )
+	{
+		printf( "b3DeserializeIntoShell: precision mismatch\n" );
+		return false;
+	}
+	if ( hdr.layoutHash != b3ComputeLayoutHash() )
+	{
+		printf( "b3DeserializeIntoShell: layout hash mismatch\n" );
+		return false;
+	}
+
+	b3SnapReader readerStorage;
+	b3SnapReader* r = &readerStorage;
+	r->data = data;
+	r->cursor = (int)sizeof( b3SnapHeader );
+	r->size = size;
+	r->ok = true;
+
+    // TODO: leaking
+	// Free existing per-object heap before overwriting
+	// b3FreeLiveSimElements( world );
+
+	// 1. World scalars
+	b3DesWorldConfig( r, world );
+
+	// 2. 6 id pools; destroy the pre-created sets' pool state first
+	b3DesIdPool( r, &world->bodyIdPool );
+	b3DesIdPool( r, &world->shapeIdPool );
+	b3DesIdPool( r, &world->contactIdPool );
+	b3DesIdPool( r, &world->jointIdPool );
+	b3DesIdPool( r, &world->islandIdPool );
+	b3DesIdPool( r, &world->solverSetIdPool );
+
+	// 3. Solver sets: destroy inner arrays of existing sets first
+	for ( int i = 0; i < world->solverSets.count; ++i )
+	{
+		b3SolverSet* set = world->solverSets.data + i;
+		b3Array_Destroy( set->bodySims );
+		b3Array_Destroy( set->bodyStates );
+		b3Array_Destroy( set->jointSims );
+		b3Array_Destroy( set->contactIndices );
+		b3Array_Destroy( set->islandSims );
+	}
+
+	int setCount = b3SnapR_I32( r );
+	if ( r->ok && b3SnapCheckCount( r, setCount, (int)sizeof( b3SolverSet ), 6 * (int)sizeof( int ) ) == false )
+	{
+		r->ok = false;
+	}
+	if ( r->ok )
+	{
+		b3Array_Resize( world->solverSets, setCount );
+		memset( world->solverSets.data, 0, (size_t)setCount * sizeof( b3SolverSet ) );
+		for ( int i = 0; i < setCount; ++i )
+		{
+			b3DesSolverSet( r, world->solverSets.data + i );
+		}
+	}
+
+	if ( !r->ok )
+	{
+		return false;
+	}
+
+	// 4. Body sparse array
+	{
+		int bodyCount = b3SnapR_I32( r );
+		if ( r->ok && b3SnapCheckCount( r, bodyCount, (int)sizeof( b3Body ), (int)sizeof( b3Body ) ) == false )
+		{
+			r->ok = false;
+		}
+		if ( r->ok )
+		{
+			b3Array_Resize( world->bodies, bodyCount );
+			for ( int i = 0; i < bodyCount; ++i )
+			{
+				b3SnapR_Bytes( r, world->bodies.data + i, sizeof( b3Body ) );
+				world->bodies.data[i].userData = NULL;
+			}
+		}
+	}
+
+	if ( !r->ok )
+	{
+		return false;
+	}
+
+	// 6. Contact sparse array
+	b3DesContacts( r, world );
+
+	if ( !r->ok )
+	{
+		return false;
+	}
+
+	// 7. Joint sparse array
+	{
+		int jointCount = b3SnapR_I32( r );
+		if ( r->ok && b3SnapCheckCount( r, jointCount, (int)sizeof( b3Joint ), (int)sizeof( b3Joint ) ) == false )
+		{
+			r->ok = false;
+		}
+		if ( r->ok )
+		{
+			b3Array_Resize( world->joints, jointCount );
+			for ( int i = 0; i < jointCount; ++i )
+			{
+				b3SnapR_Bytes( r, world->joints.data + i, sizeof( b3Joint ) );
+				world->joints.data[i].userData = NULL;
+			}
+		}
+	}
+
+	// 8. Sensors
+	{
+		b3Array_Destroy( world->sensors );
+		b3Array_Create( world->sensors );
+
+		int sensorCount = b3SnapR_I32( r );
+		if ( r->ok && b3SnapCheckCount( r, sensorCount, (int)sizeof( b3Sensor ), 4 * (int)sizeof( int ) ) == false )
+		{
+			r->ok = false;
+		}
+		if ( r->ok && sensorCount > 0 )
+		{
+			b3Array_Resize( world->sensors, sensorCount );
+			memset( world->sensors.data, 0, (size_t)sensorCount * sizeof( b3Sensor ) );
+		}
+
+		for ( int i = 0; i < sensorCount && r->ok; ++i )
+		{
+			b3Sensor* s = world->sensors.data + i;
+			s->shapeId = b3SnapR_I32( r );
+			b3Array_Create( s->hits );
+			b3Array_Create( s->overlaps1 );
+			b3Array_Create( s->overlaps2 );
+			b3DesPodArray( r, s->hits );
+			b3DesPodArray( r, s->overlaps1 );
+			b3DesPodArray( r, s->overlaps2 );
+		}
+	}
+
+	// 9. Islands
+	{
+		b3Array_Destroy( world->islands );
+		b3Array_Create( world->islands );
+
+		int islandCount = b3SnapR_I32( r );
+		if ( r->ok && b3SnapCheckCount( r, islandCount, (int)sizeof( b3Island ), 7 * (int)sizeof( int ) ) == false )
+		{
+			r->ok = false;
+		}
+		if ( r->ok && islandCount > 0 )
+		{
+			b3Array_Resize( world->islands, islandCount );
+			memset( world->islands.data, 0, (size_t)islandCount * sizeof( b3Island ) );
+		}
+
+		for ( int i = 0; i < islandCount && r->ok; ++i )
+		{
+			b3Island* island = world->islands.data + i;
+			island->setIndex = b3SnapR_I32( r );
+			island->localIndex = b3SnapR_I32( r );
+			island->islandId = b3SnapR_I32( r );
+			island->constraintRemoveCount = b3SnapR_I32( r );
+			b3Array_Create( island->bodies );
+			b3Array_Create( island->contacts );
+			b3Array_Create( island->joints );
+			b3DesPodArray( r, island->bodies );
+			b3DesPodArray( r, island->contacts );
+			b3DesPodArray( r, island->joints );
+		}
+	}
+
+	// 10. Broad phase
+	{
+		b3BroadPhase* bp = &world->broadPhase;
+
+		for ( int t = 0; t < b3_bodyTypeCount; ++t )
+		{
+			b3DesTree( r, &bp->trees[t] );
+		}
+		for ( int t = 0; t < b3_bodyTypeCount; ++t )
+		{
+			b3DesBitSet( r, &bp->movedProxies[t] );
+		}
+
+		b3Array_Destroy( bp->moveArray );
+		b3Array_Create( bp->moveArray );
+		b3DesPodArray( r, bp->moveArray );
+
+		b3DesHashSet( r, &bp->pairSet );
+		// Transient moveResults/movePairs stay at shell's NULL/0
+	}
+
+	// 11. Constraint graph
+	{
+		b3ConstraintGraph* graph = &world->constraintGraph;
+		for ( int c = 0; c < B3_GRAPH_COLOR_COUNT; ++c )
+		{
+			b3DesGraphColor( r, &graph->colors[c], c == B3_OVERFLOW_INDEX );
+		}
+	}
+
+	b3DesNames( r, &world->names );
+
+	return r->ok;
+}
+

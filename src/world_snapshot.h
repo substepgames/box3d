@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "box3d/box3d.h"
 #include "recording.h"
 #include "recording_replay.h"
 
@@ -19,3 +20,7 @@ int b3SerializeWorld( b3World* world, b3RecBuffer* buf, b3Recording* rec );
 // snapshot image [data, size). Geometry references are resolved via the shared
 // registry slots in rdr. Returns false on a corrupt or incompatible image.
 bool b3DeserializeIntoShell( const uint8_t* data, int size, b3World* world, b3RecReader* rdr );
+
+int b3SaveSnapshot( b3WorldId worldId, b3RecBuffer* buf );
+
+bool b3RestoreSnapshot( const uint8_t* data, int size, b3WorldId worldId );

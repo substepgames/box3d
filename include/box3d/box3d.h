@@ -1776,3 +1776,7 @@ B3_API bool b3Contact_IsValid( b3ContactId id );
 B3_API b3ContactData b3Contact_GetData( b3ContactId contactId );
 
 /**@}*/ // contact
+
+B3_API int b3SaveSnapshot( b3WorldId worldId, b3RecBuffer* buf );
+
+B3_API bool b3RestoreSnapshot( const uint8_t* data, int size, b3WorldId worldId );

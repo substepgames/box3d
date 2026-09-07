@@ -75,16 +75,6 @@ typedef struct b3RecHeader
 
 _Static_assert( sizeof( b3RecHeader ) == 48, "recording header must be 48 bytes" );
 
-// Growable append-only byte buffer. Doubles on demand. countOnly mode tallies size without
-// allocating, used to size a buffer cheaply before a second filling pass.
-typedef struct b3RecBuffer
-{
-	uint8_t* data;
-	int capacity;
-	int size;
-	bool countOnly;
-} b3RecBuffer;
-
 // Geometry kinds for the trailing registry section
 typedef enum b3GeometryKind
 {

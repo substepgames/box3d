@@ -3095,3 +3095,13 @@ typedef struct b3DebugDraw
 B3_API b3DebugDraw b3DefaultDebugDraw( void );
 
 /**@}*/ // debug_draw
+// Growable append-only byte buffer. Doubles on demand. countOnly mode tallies size without
+// allocating, used to size a buffer cheaply before a second filling pass.
+
+typedef struct b3RecBuffer
+{
+	uint8_t* data;
+	int capacity;
+	int size;
+	bool countOnly;
+} b3RecBuffer;
