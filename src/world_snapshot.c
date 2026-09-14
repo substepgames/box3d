@@ -1369,30 +1369,36 @@ int b3SaveSnapshot( b3WorldId worldId, b3RecBuffer* buf )
 		b3SerSolverSet( buf, world->solverSets.data + i );
 	}
 
-	// Sparse body array (userData is host wiring, zero it on the copy)
+	// Sparse body array
 	{
 		int bodyCount = world->bodies.count;
 		b3SnapW_I32( buf, bodyCount );
 		for ( int i = 0; i < bodyCount; ++i )
 		{
-			b3Body elem = world->bodies.data[i];
-			elem.userData = NULL;
-			b3SnapW_Bytes( buf, &elem, sizeof( b3Body ) );
+			b3SnapW_Bytes( buf, &world->bodies.data[i], sizeof( b3Body ) );
+		}
+	}
+
+	// Sparse shape array
+	{
+		int shapeCount = world->shapes.count;
+		b3SnapW_I32( buf, shapeCount );
+		for ( int i = 0; i < shapeCount; ++i )
+		{
+			b3SnapW_Bytes( buf, &world->shapes.data[i], sizeof( b3Shape ) );
 		}
 	}
 
 	// Contact sparse array with manifold and mesh triangleCache
 	b3SerContacts( buf, world );
 
-	// Joint sparse array (userData scrubbed)
+	// Joint sparse array
 	{
 		int jointCount = world->joints.count;
 		b3SnapW_I32( buf, jointCount );
 		for ( int i = 0; i < jointCount; ++i )
 		{
-			b3Joint elem = world->joints.data[i];
-			elem.userData = NULL;
-			b3SnapW_Bytes( buf, &elem, sizeof( b3Joint ) );
+			b3SnapW_Bytes( buf, &world->joints.data[i], sizeof( b3Joint ) );
 		}
 	}
 
@@ -1493,14 +1499,47 @@ bool b3RestoreSnapshot( const uint8_t* data, int size, b3WorldId worldId )
 	r->size = size;
 	r->ok = true;
 
-    // TODO: leaking
-	// Free existing per-object heap before overwriting
-	// b3FreeLiveSimElements( world );
+	// Contact heap: manifolds + mesh triangleCache
+	for ( int i = 0; i < world->contacts.count; ++i )
+	{
+		b3Contact* c = world->contacts.data + i;
+		if ( c->contactId == i )
+		{
+			if ( c->manifolds != NULL )
+			{
+				b3FreeManifolds( world, c->manifolds, c->manifoldCount );
+				c->manifolds = NULL;
+				c->manifoldCount = 0;
+			}
+			if ( c->flags & b3_simMeshContact )
+			{
+				b3Array_Destroy( c->meshContact.triangleCache );
+			}
+		}
+	}
+
+	// Sensor heap: inner arrays
+	for ( int i = 0; i < world->sensors.count; ++i )
+	{
+		b3Sensor* sensor = world->sensors.data + i;
+		b3Array_Destroy( sensor->hits );
+		b3Array_Destroy( sensor->overlaps1 );
+		b3Array_Destroy( sensor->overlaps2 );
+	}
+
+	// Island heap: inner arrays
+	for ( int i = 0; i < world->islands.count; ++i )
+	{
+		b3Island* island = world->islands.data + i;
+		b3Array_Destroy( island->bodies );
+		b3Array_Destroy( island->contacts );
+		b3Array_Destroy( island->joints );
+	}
 
 	// 1. World scalars
 	b3DesWorldConfig( r, world );
 
-	// 2. 6 id pools; destroy the pre-created sets' pool state first
+	// 2. 6 id pools
 	b3DesIdPool( r, &world->bodyIdPool );
 	b3DesIdPool( r, &world->shapeIdPool );
 	b3DesIdPool( r, &world->contactIdPool );
@@ -1552,7 +1591,28 @@ bool b3RestoreSnapshot( const uint8_t* data, int size, b3WorldId worldId )
 			for ( int i = 0; i < bodyCount; ++i )
 			{
 				b3SnapR_Bytes( r, world->bodies.data + i, sizeof( b3Body ) );
-				world->bodies.data[i].userData = NULL;
+			}
+		}
+	}
+
+	if ( !r->ok )
+	{
+		return false;
+	}
+
+	// 5. Shape sparse array
+	{
+		int shapeCount = b3SnapR_I32( r );
+		if ( r->ok && b3SnapCheckCount( r, shapeCount, (int)sizeof( b3Shape ), (int)sizeof( b3Shape ) ) == false )
+		{
+			r->ok = false;
+		}
+		if ( r->ok )
+		{
+			b3Array_Resize( world->shapes, shapeCount );
+			for ( int i = 0; i < shapeCount; ++i )
+			{
+				b3SnapR_Bytes( r, world->shapes.data + i, sizeof( b3Shape ) );
 			}
 		}
 	}
@@ -1583,7 +1643,6 @@ bool b3RestoreSnapshot( const uint8_t* data, int size, b3WorldId worldId )
 			for ( int i = 0; i < jointCount; ++i )
 			{
 				b3SnapR_Bytes( r, world->joints.data + i, sizeof( b3Joint ) );
-				world->joints.data[i].userData = NULL;
 			}
 		}
 	}
