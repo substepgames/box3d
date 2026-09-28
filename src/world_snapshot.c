@@ -1402,20 +1402,6 @@ int b3SaveSnapshot( b3WorldId worldId, b3RecBuffer* buf )
 		}
 	}
 
-	// Sensors: shapeId + 3 inner arrays each
-	{
-		int sensorCount = world->sensors.count;
-		b3SnapW_I32( buf, sensorCount );
-		for ( int i = 0; i < sensorCount; ++i )
-		{
-			b3Sensor* s = world->sensors.data + i;
-			b3SnapW_I32( buf, s->shapeId );
-			b3SerPodArray( buf, s->hits );
-			b3SerPodArray( buf, s->overlaps1 );
-			b3SerPodArray( buf, s->overlaps2 );
-		}
-	}
-
 	// Islands: 4 scalars + 3 inner arrays each
 	{
 		int islandCount = world->islands.count;
@@ -1516,15 +1502,6 @@ bool b3RestoreSnapshot( const uint8_t* data, int size, b3WorldId worldId )
 				b3Array_Destroy( c->meshContact.triangleCache );
 			}
 		}
-	}
-
-	// Sensor heap: inner arrays
-	for ( int i = 0; i < world->sensors.count; ++i )
-	{
-		b3Sensor* sensor = world->sensors.data + i;
-		b3Array_Destroy( sensor->hits );
-		b3Array_Destroy( sensor->overlaps1 );
-		b3Array_Destroy( sensor->overlaps2 );
 	}
 
 	// Island heap: inner arrays
@@ -1647,35 +1624,6 @@ bool b3RestoreSnapshot( const uint8_t* data, int size, b3WorldId worldId )
 		}
 	}
 
-	// 8. Sensors
-	{
-		b3Array_Destroy( world->sensors );
-		b3Array_Create( world->sensors );
-
-		int sensorCount = b3SnapR_I32( r );
-		if ( r->ok && b3SnapCheckCount( r, sensorCount, (int)sizeof( b3Sensor ), 4 * (int)sizeof( int ) ) == false )
-		{
-			r->ok = false;
-		}
-		if ( r->ok && sensorCount > 0 )
-		{
-			b3Array_Resize( world->sensors, sensorCount );
-			memset( world->sensors.data, 0, (size_t)sensorCount * sizeof( b3Sensor ) );
-		}
-
-		for ( int i = 0; i < sensorCount && r->ok; ++i )
-		{
-			b3Sensor* s = world->sensors.data + i;
-			s->shapeId = b3SnapR_I32( r );
-			b3Array_Create( s->hits );
-			b3Array_Create( s->overlaps1 );
-			b3Array_Create( s->overlaps2 );
-			b3DesPodArray( r, s->hits );
-			b3DesPodArray( r, s->overlaps1 );
-			b3DesPodArray( r, s->overlaps2 );
-		}
-	}
-
 	// 9. Islands
 	{
 		b3Array_Destroy( world->islands );
@@ -1686,7 +1634,7 @@ bool b3RestoreSnapshot( const uint8_t* data, int size, b3WorldId worldId )
 		{
 			r->ok = false;
 		}
-		if ( r->ok && islandCount > 0 )
+		if ( r->ok )
 		{
 			b3Array_Resize( world->islands, islandCount );
 			memset( world->islands.data, 0, (size_t)islandCount * sizeof( b3Island ) );
