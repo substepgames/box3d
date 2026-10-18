@@ -15,4 +15,5 @@ CMakeUserPresets.json
 Superluminal/
 build-dp/
 AGENTS.md
+*.zip
 .ccls-cache

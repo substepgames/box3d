@@ -5,7 +5,7 @@
 
 #include "box3d/box3d.h"
 #include "recording.h"
-#include "recording_replay.h"
+#include "replay.h"
 
 #include <stdbool.h>
 #include <stdint.h>
