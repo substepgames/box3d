@@ -1436,6 +1436,8 @@ int b3SaveSnapshot( b3WorldId worldId, b3RecBuffer* buf )
 		}
 	}
 
+	b3SerPodArray( buf, world->fatAABBs );
+
 	// Contact sparse array with manifold and mesh triangleCache
 	b3SerContacts( buf, world );
 
@@ -1472,11 +1474,6 @@ int b3SaveSnapshot( b3WorldId worldId, b3RecBuffer* buf )
 	{
 		b3SerTree( buf, &bp->trees[t] );
 	}
-	for ( int t = 0; t < b3_bodyTypeCount; ++t )
-	{
-		b3SerBitSet( buf, &bp->movedProxies[t] );
-	}
-	b3SerPodArray( buf, bp->moveArray );
 	b3SerHashSet( buf, &bp->pairSet );
 
 	// Constraint graph
@@ -1646,6 +1643,13 @@ bool b3RestoreSnapshot( const uint8_t* data, int size, b3WorldId worldId )
 		return false;
 	}
 
+	b3DesPodArray( r, world->fatAABBs );
+
+	if ( !r->ok )
+	{
+		return false;
+	}
+
 	// 6. Contact sparse array
 	b3DesContacts( r, world );
 
@@ -1711,14 +1715,6 @@ bool b3RestoreSnapshot( const uint8_t* data, int size, b3WorldId worldId )
 		{
 			b3DesTree( r, &bp->trees[t] );
 		}
-		for ( int t = 0; t < b3_bodyTypeCount; ++t )
-		{
-			b3DesBitSet( r, &bp->movedProxies[t] );
-		}
-
-		b3Array_Destroy( bp->moveArray );
-		b3Array_Create( bp->moveArray );
-		b3DesPodArray( r, bp->moveArray );
 
 		b3DesHashSet( r, &bp->pairSet );
 		// Transient moveResults/movePairs stay at shell's NULL/0
