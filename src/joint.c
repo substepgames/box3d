@@ -367,6 +367,7 @@ static b3JointPair b3CreateJoint( b3World* world, const b3JointDef* def, b3Joint
 
 	jointSim->forceThreshold = def->forceThreshold;
 	jointSim->torqueThreshold = def->torqueThreshold;
+    jointSim->enabled = true;
 
 	B3_ASSERT( jointSim->jointId == jointId );
 	B3_ASSERT( jointSim->bodyIdA == bodyIdA );
@@ -972,6 +973,22 @@ bool b3Joint_GetCollideConnected( b3JointId jointId )
 	return joint->collideConnected;
 }
 
+void b3Joint_SetEnabled( b3JointId jointId, bool enabled )
+{
+	b3World* world = b3GetUnlockedWorld( jointId.world0 );
+	b3Joint* joint = b3GetJointFullId( world, jointId );
+	b3JointSim* base = b3GetJointSim( world, joint );
+	base->enabled = enabled;
+}
+
+bool b3Joint_GetEnabled( b3JointId jointId )
+{
+	b3World* world = b3GetWorld( jointId.world0 );
+	b3Joint* joint = b3GetJointFullId( world, jointId );
+	b3JointSim* base = b3GetJointSim( world, joint );
+	return base->enabled;
+}
+
 void b3Joint_SetUserData( b3JointId jointId, void* userData )
 {
 	b3World* world = b3GetWorld( jointId.world0 );
@@ -1481,6 +1498,7 @@ void b3Joint_SetSpringRotationTarget( b3JointId jointId, b3Quat relativeBodyRota
 
 void b3PrepareJoint( b3JointSim* joint, b3StepContext* context )
 {
+    if ( !joint->enabled ) return;
 	// Clamp joint hertz based on the time step to reduce jitter.
 	float hertz = b3MinFloat( joint->constraintHertz, 0.25f * context->inv_h );
 	joint->constraintSoftness = b3MakeSoft( hertz, joint->constraintDampingRatio, context->h );
@@ -1529,6 +1547,7 @@ void b3PrepareJoint( b3JointSim* joint, b3StepContext* context )
 
 void b3WarmStartJoint( b3JointSim* joint, b3StepContext* context )
 {
+    if ( !joint->enabled ) return;
 	switch ( joint->type )
 	{
 		case b3_parallelJoint:
@@ -1574,6 +1593,7 @@ void b3WarmStartJoint( b3JointSim* joint, b3StepContext* context )
 void b3SolveJoint( b3JointSim* joint, b3StepContext* context, bool useBias )
 {
 	B3_UNUSED( useBias );
+    if ( !joint->enabled ) return;
 
 	switch ( joint->type )
 	{

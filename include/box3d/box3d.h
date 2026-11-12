@@ -1121,6 +1121,12 @@ B3_API void b3Joint_SetCollideConnected( b3JointId jointId, bool shouldCollide )
 /// Is collision allowed between connected bodies?
 B3_API bool b3Joint_GetCollideConnected( b3JointId jointId );
 
+/// Enable or disable joint
+B3_API void b3Joint_SetEnabled( b3JointId jointId, bool enabled );
+
+/// Is joint enabled
+B3_API bool b3Joint_GetEnabled( b3JointId jointId );
+
 /// Set the user data on a joint
 B3_API void b3Joint_SetUserData( b3JointId jointId, void* userData );
 

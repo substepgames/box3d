@@ -331,6 +331,7 @@ typedef struct b3JointSim
 	float torqueThreshold;
 
 	bool fixedRotation;
+	bool enabled;
 
 	union
 	{
